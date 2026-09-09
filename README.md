@@ -13,19 +13,7 @@ single **EC2** instance — no Cognito required.
 
 ## Architecture
 
-```
-User (browser)
-   │  HTTP
-   ▼
-EC2 instance (Flask app, uses its IAM role — no Cognito)
-   │  lex:RecognizeText
-   ▼
-Amazon Lex  ──►  QnAIntent  ──►  Bedrock Knowledge Base (VECTOR)
-                                     │
-                                     ├─ Embeddings model (vectorize query)
-                                     ├─ Vector store (semantic search over your docs in S3)
-                                     └─ Foundation model (generate the answer)
-```
+![Architecture — Amazon Lex + Bedrock Knowledge Base with an EC2-hosted chat UI](images/architecture.png)
 
 ---
 
@@ -33,13 +21,13 @@ Amazon Lex  ──►  QnAIntent  ──►  Bedrock Knowledge Base (VECTOR)
 
 The project is split into parts. Complete them in order.
 
-| Part | Title | Status |
-|------|-------|--------|
-| 1 | Create and Test the Lex Bot | ✅ Done |
-| 2 | Upload documents to S3 and create the Bedrock Knowledge Base (VECTOR) | ✅ Done |
-| 3 | Add the QnAIntent and connect the Knowledge Base | ✅ Done |
-| 4 | Deploy the chat UI (EC2 + IAM role) | ✅ Done |
-| 5 | Clean up | ✅ Done |
+| Part | Title |
+|------|-------|
+| 1 | Create and Test the Lex Bot |
+| 2 | Upload documents to S3 and create the Bedrock Knowledge Base (VECTOR) |
+| 3 | Add the QnAIntent and connect the Knowledge Base |
+| 4 | Deploy the chat UI (EC2 + IAM role) |
+| 5 | Clean up |
 
 ---
 
@@ -145,7 +133,7 @@ the bot responds with your configured messages:
 
 ![Test — bot responds to greetings](images/07-test.png)
 
-✅ **Part 1 complete** — you have a working Lex bot that greets users.
+**Part 1 complete** — you have a working Lex bot that greets users.
 
 ---
 
@@ -180,7 +168,7 @@ Open the S3 console → **Create bucket**.
 
 ![Upload — Add files](images/11-upload-add-files.png)
 
-4. Select your PDF documents (example: `cloud_bill.pdf`, `AWS_Services_Simple.pdf`).
+4. Select your PDF documents (example: `aws_bill.pdf`, `AWS_Services_Simple.pdf`).
 5. Choose **Upload** in the bottom-right corner.
 
 ![Upload — files selected, click Upload](images/12-upload-files-selected.png)
@@ -240,7 +228,7 @@ This usually takes **2–3 minutes** (longer for large data).
 
 ![KB syncing in progress](images/16-kb-syncing.png)
 
-✅ **Part 2 complete** — you have a VECTOR Knowledge Base populated with your
+**Part 2 complete** — you have a VECTOR Knowledge Base populated with your
 documents, ready to connect to Lex.
 
 ---
@@ -345,7 +333,7 @@ The bot responds using the Knowledge Base.
 
 ![Test → Inspect — bot answers from the Knowledge Base](images/23-test-inspect-answer.png)
 
-✅ **Part 3 complete** — the Lex bot is connected to the Knowledge Base, has the
+**Part 3 complete** — the Lex bot is connected to the Knowledge Base, has the
 required IAM permission, and answers questions from your documents.
 
 ---
@@ -356,7 +344,37 @@ In this part you deploy `master-minimal.yaml`. It provisions the front end for
 the bot: an EC2 instance that serves a custom chat page and calls Lex using its
 instance IAM role (no Cognito). The template file is included in this repo.
 
-## 4.1 Find your bot ID and alias ID
+## 4.1 Pre-check: default VPC and subnets
+
+The template launches the EC2 instance into the account's **default VPC**. If
+the default VPC is missing (some accounts have it deleted) or has no subnets,
+the stack will fail. Verify it exists before deploying.
+
+Run these commands (AWS CLI, region `us-east-1`):
+
+```bash
+# 1. Confirm a default VPC exists — should print a vpc-xxxx ID (not "None")
+aws ec2 describe-vpcs \
+  --filters "Name=isDefault,Values=true" \
+  --query "Vpcs[0].VpcId" --output text --region us-east-1
+
+# 2. Confirm the default VPC has at least one subnet — should print one or more subnet IDs
+DEFAULT_VPC=$(aws ec2 describe-vpcs --filters "Name=isDefault,Values=true" \
+  --query "Vpcs[0].VpcId" --output text --region us-east-1)
+aws ec2 describe-subnets \
+  --filters "Name=vpc-id,Values=$DEFAULT_VPC" \
+  --query "Subnets[].SubnetId" --output text --region us-east-1
+```
+
+- If command 1 prints `None`, there is **no default VPC**. Create one from the
+  VPC console (**Actions → Create default VPC**) or via
+  `aws ec2 create-default-vpc --region us-east-1`, then re-check.
+- If command 2 prints nothing, the default VPC has **no subnets** — create a
+  default subnet, or use an account/region that has them.
+
+Once both commands return values, continue.
+
+## 4.2 Find your bot ID and alias ID
 
 You need two values from Lex.
 
@@ -370,7 +388,7 @@ You need two values from Lex.
 
 ![Alias details — copy the Bot alias ID](images/26-bot-alias-id.png)
 
-## 4.2 Create the CloudFormation stack
+## 4.3 Create the CloudFormation stack
 
 Open the CloudFormation console:
 
@@ -384,14 +402,14 @@ Open the CloudFormation console:
 
 ![Create stack — upload the template file](images/24-cfn-create-stack-upload.png)
 
-## 4.3 Specify stack details
+## 4.4 Specify stack details
 
 1. **Stack name:** enter a name (for example, `chatbot`).
 2. **LexV2BotId:** paste your bot ID.
 3. **LexV2BotAliasId:** paste your bot alias ID.
 4. Choose **Next**.
 
-## 4.4 Configure options and acknowledge IAM
+## 4.5 Configure options and acknowledge IAM
 
 1. Leave the options at their defaults and scroll to **Capabilities**.
 2. Check **I acknowledge that AWS CloudFormation might create IAM resources**.
@@ -399,13 +417,13 @@ Open the CloudFormation console:
 
 ![Acknowledge IAM capability](images/27-cfn-acknowledge-iam.png)
 
-## 4.5 Wait for deployment
+## 4.6 Wait for deployment
 
 The template deploys the front-end resources (EC2 instance, IAM role, security
 group, Elastic IP). You can watch progress in the **Events** / timeline view.
 Wait until the stack status is **CREATE_COMPLETE**.
 
-## 4.6 Open the chatbot
+## 4.7 Open the chatbot
 
 1. Go to the **Outputs** tab.
 2. Open **PublicDnsUrl** (or **WebsiteUrl**) in a new tab.
@@ -419,7 +437,7 @@ and it answers from your Knowledge Base.
 
 ![CloudKida chatbot live in the browser](images/29-chatbot-live.png)
 
-✅ **Part 4 complete** — the chatbot is deployed and accessible from a browser.
+**Part 4 complete** — the chatbot is deployed and accessible from a browser.
 
 ---
 
@@ -468,7 +486,7 @@ The Lex bot and Bedrock KB each created a service role
 IAM roles are free, but you can delete them from the IAM console if you want a
 completely clean account.
 
-✅ **Part 5 complete** — all project resources are removed.
+**Part 5 complete** — all project resources are removed.
 
 ---
 
