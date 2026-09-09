@@ -1,4 +1,4 @@
-# Self-Service Digital Assistant — Amazon Lex + Bedrock Knowledge Base
+# Build an AI-Powered Chatbot with Amazon Lex, Bedrock & S3
 
 > **Lab sandbox (students):** launch your hands-on AWS environment here —
 > <https://prod.cloudkida.com/viewlab/CKLAWS-2d9857aaeb8546df838ac74cff264029>
