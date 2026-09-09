@@ -1,0 +1,249 @@
+AWSTemplateFormatVersion: 2010-09-09
+
+Description: >
+    Minimal EC2-hosted Lex V2 web chat demo (NO Cognito, NO SSH key).
+    A single EC2 instance in the default VPC serves a chat page and calls Lex
+    server-side using its instance IAM role, so no browser credentials are needed.
+    Creates:
+      - 1 IAM instance role scoped to ONLY lex:RecognizeText / lex:RecognizeUtterance on the bot
+      - 1 Security Group (inbound HTTP :80 open to the world for the demo page)
+      - 1 EC2 instance (Amazon Linux 2023, t3.micro) running a tiny Flask backend
+      - 1 Elastic IP so the public URL stays stable across reboots
+    Access:
+      - Open the WebsiteUrl output in a browser.
+      - Manage the box with EC2 Instance Connect (no SSH key / no port 22 needed).
+
+Parameters:
+
+    LexV2BotId:
+        Type: String
+        Default: RBVHN58YRT
+        Description: Bot ID (not name) of the existing Lex V2 bot.
+
+    LexV2BotAliasId:
+        Type: String
+        Default: TSTALIASID
+        Description: Bot alias ID (TSTALIASID is the Draft/Test alias).
+
+    LexV2BotLocaleId:
+        Type: String
+        Default: en_US
+        Description: Locale of the bot.
+
+    InstanceType:
+        Type: String
+        Default: t3.micro
+        Description: EC2 instance type.
+
+    LatestAmiId:
+        Type: AWS::SSM::Parameter::Value<AWS::EC2::Image::Id>
+        Default: /aws/service/ami-amazon-linux-latest/al2023-ami-kernel-default-x86_64
+        Description: Latest Amazon Linux 2023 AMI (resolved automatically via SSM).
+
+Resources:
+
+    # ---------------------------------------------------------------------
+    # IAM instance role - scoped to only calling the one Lex bot
+    # ---------------------------------------------------------------------
+    InstanceRole:
+        Type: AWS::IAM::Role
+        Properties:
+            AssumeRolePolicyDocument:
+                Version: 2012-10-17
+                Statement:
+                    - Effect: Allow
+                      Principal:
+                          Service: ec2.amazonaws.com
+                      Action: sts:AssumeRole
+            Policies:
+                - PolicyName: LexRuntimeAccess
+                  PolicyDocument:
+                      Version: 2012-10-17
+                      Statement:
+                          - Effect: Allow
+                            Action:
+                                - lex:RecognizeText
+                                - lex:RecognizeUtterance
+                            Resource:
+                                - !Sub "arn:aws:lex:${AWS::Region}:${AWS::AccountId}:bot-alias/${LexV2BotId}/${LexV2BotAliasId}"
+
+    InstanceProfile:
+        Type: AWS::IAM::InstanceProfile
+        Properties:
+            Roles:
+                - !Ref InstanceRole
+
+    # ---------------------------------------------------------------------
+    # Security group - HTTP :80 open for the demo page.
+    # (EC2 Instance Connect uses the AWS console/API, not an inbound SG rule,
+    #  so no SSH port is opened.)
+    # ---------------------------------------------------------------------
+    WebSecurityGroup:
+        Type: AWS::EC2::SecurityGroup
+        Properties:
+            GroupDescription: Allow inbound HTTP for the Lex demo chat page
+            SecurityGroupIngress:
+                - IpProtocol: tcp
+                  FromPort: 80
+                  ToPort: 80
+                  CidrIp: 0.0.0.0/0
+                  Description: HTTP demo page
+
+    # ---------------------------------------------------------------------
+    # EC2 instance running the tiny Flask backend via user data
+    # ---------------------------------------------------------------------
+    WebInstance:
+        Type: AWS::EC2::Instance
+        Properties:
+            InstanceType: !Ref InstanceType
+            ImageId: !Ref LatestAmiId
+            IamInstanceProfile: !Ref InstanceProfile
+            SecurityGroupIds:
+                - !Ref WebSecurityGroup
+            Tags:
+                - Key: Name
+                  Value: lex-demo-web
+            UserData:
+                Fn::Base64: !Sub |
+                    #!/bin/bash
+                    set -xe
+                    dnf update -y
+                    dnf install -y python3 python3-pip
+                    pip3 install flask boto3
+
+                    mkdir -p /opt/lexdemo
+                    cat > /opt/lexdemo/app.py <<'PYEOF'
+                    import os
+                    import boto3
+                    from flask import Flask, request, jsonify, Response
+
+                    REGION   = os.environ.get("REGION", "us-east-1")
+                    BOT_ID   = os.environ.get("BOT_ID")
+                    ALIAS_ID = os.environ.get("BOT_ALIAS_ID")
+                    LOCALE   = os.environ.get("LOCALE_ID", "en_US")
+
+                    app = Flask(__name__)
+                    lex = boto3.client("lexv2-runtime", region_name=REGION)
+
+                    PAGE = """<!DOCTYPE html>
+                    <html lang="en"><head><meta charset="UTF-8"/>
+                    <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+                    <title>CloudKida Assistant</title>
+                    <style>
+                    /* ---- CloudKida theme: change --accent / --accent2 to retune ---- */
+                    :root{--bg:#0b1120;--panel:#111a2e;--accent:#22d3ee;--accent2:#0ea5e9;--text:#e6edf6;--muted:#8aa0bd;}
+                    *{box-sizing:border-box;}
+                    body{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;margin:0;min-height:100vh;color:var(--text);
+                      background:radial-gradient(1200px 600px at 20% -10%,rgba(34,211,238,.15),transparent 60%),radial-gradient(1000px 500px at 100% 0%,rgba(14,165,233,.15),transparent 55%),var(--bg);
+                      display:flex;align-items:center;justify-content:center;padding:16px;}
+                    .chat{width:440px;max-width:96vw;height:660px;max-height:94vh;background:var(--panel);border:1px solid rgba(34,211,238,.18);
+                      border-radius:16px;box-shadow:0 20px 60px rgba(0,0,0,.5);display:flex;flex-direction:column;overflow:hidden;}
+                    .header{background:linear-gradient(135deg,var(--accent2),var(--accent));color:#04121a;padding:16px 20px;display:flex;align-items:center;gap:12px;}
+                    .logo{width:38px;height:38px;border-radius:10px;background:#04121a;color:var(--accent);display:flex;align-items:center;justify-content:center;font-weight:800;font-size:18px;letter-spacing:-1px;flex:none;}
+                    .brand{font-weight:700;font-size:17px;line-height:1.1;}
+                    .brand small{display:block;font-weight:500;opacity:.75;font-size:11px;margin-top:3px;letter-spacing:.2px;}
+                    .messages{flex:1;padding:18px;overflow-y:auto;display:flex;flex-direction:column;gap:12px;}
+                    .msg{max-width:82%;padding:11px 15px;border-radius:16px;line-height:1.45;font-size:14px;white-space:pre-wrap;}
+                    .bot{align-self:flex-start;background:#1b2740;color:var(--text);border:1px solid rgba(138,160,189,.18);border-bottom-left-radius:5px;}
+                    .user{align-self:flex-end;background:linear-gradient(135deg,var(--accent2),var(--accent));color:#04121a;font-weight:500;border-bottom-right-radius:5px;}
+                    .composer{display:flex;border-top:1px solid rgba(138,160,189,.15);padding:12px;gap:10px;background:#0e1626;}
+                    .composer input{flex:1;background:#0b1120;color:var(--text);border:1px solid rgba(138,160,189,.25);border-radius:22px;padding:11px 16px;font-size:14px;outline:none;}
+                    .composer input::placeholder{color:var(--muted);}
+                    .composer input:focus{border-color:var(--accent);box-shadow:0 0 0 2px rgba(34,211,238,.2);}
+                    .composer button{border:none;background:linear-gradient(135deg,var(--accent2),var(--accent));color:#04121a;font-weight:700;border-radius:22px;padding:0 20px;cursor:pointer;font-size:14px;}
+                    .composer button:disabled{opacity:.5;cursor:not-allowed;}
+                    .messages::-webkit-scrollbar{width:8px;}
+                    .messages::-webkit-scrollbar-thumb{background:rgba(138,160,189,.25);border-radius:8px;}
+                    </style></head>
+                    <body>
+                    <div class="chat">
+                    <div class="header"><div class="logo">CK</div><div class="brand">CloudKida Assistant<small>Hands-on Cloud &amp; Linux Labs</small></div></div>
+                    <div class="messages" id="messages"><div class="msg bot">Hi! I'm the CloudKida assistant. Ask me a question, e.g. "What is EC2?"</div></div>
+                    <div class="composer"><input id="input" type="text" placeholder="Ask about AWS, Linux, Docker..." autocomplete="off"/><button id="send">Send</button></div>
+                    </div>
+                    <script>
+                    var messagesEl=document.getElementById("messages"),inputEl=document.getElementById("input"),sendBtn=document.getElementById("send");
+                    function addMessage(t,c){var d=document.createElement("div");d.className="msg "+c;d.textContent=t;messagesEl.appendChild(d);messagesEl.scrollTop=messagesEl.scrollHeight;}
+                    function sendMessage(){var text=inputEl.value.trim();if(!text)return;addMessage(text,"user");inputEl.value="";sendBtn.disabled=true;
+                    fetch("/chat",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({text:text})})
+                    .then(function(r){return r.json();})
+                    .then(function(data){sendBtn.disabled=false;inputEl.focus();
+                    if(data.error){addMessage("Error: "+data.error,"bot");return;}
+                    if(data.messages&&data.messages.length){data.messages.forEach(function(m){addMessage(m,"bot");});}else{addMessage("(no response)","bot");}})
+                    .catch(function(e){sendBtn.disabled=false;addMessage("Error: "+e,"bot");});}
+                    sendBtn.addEventListener("click",sendMessage);
+                    inputEl.addEventListener("keydown",function(e){if(e.key==="Enter")sendMessage();});
+                    inputEl.focus();
+                    </script>
+                    </body></html>"""
+
+                    @app.route("/")
+                    def index():
+                        return Response(PAGE, mimetype="text/html")
+
+                    @app.route("/chat", methods=["POST"])
+                    def chat():
+                        text = (request.get_json(force=True) or {}).get("text", "")
+                        if not text:
+                            return jsonify({"error": "empty message"}), 400
+                        try:
+                            resp = lex.recognize_text(
+                                botId=BOT_ID, botAliasId=ALIAS_ID,
+                                localeId=LOCALE, sessionId=request.remote_addr or "web",
+                                text=text)
+                            msgs = [m.get("content") for m in resp.get("messages", []) if m.get("content")]
+                            return jsonify({"messages": msgs})
+                        except Exception as e:
+                            return jsonify({"error": str(e)}), 500
+
+                    if __name__ == "__main__":
+                        app.run(host="0.0.0.0", port=80)
+                    PYEOF
+
+                    cat > /etc/systemd/system/lexdemo.service <<'SVCEOF'
+                    [Unit]
+                    Description=Lex Demo Flask App
+                    After=network.target
+
+                    [Service]
+                    Environment=REGION=${AWS::Region}
+                    Environment=BOT_ID=${LexV2BotId}
+                    Environment=BOT_ALIAS_ID=${LexV2BotAliasId}
+                    Environment=LOCALE_ID=${LexV2BotLocaleId}
+                    ExecStart=/usr/bin/python3 /opt/lexdemo/app.py
+                    Restart=always
+                    User=root
+
+                    [Install]
+                    WantedBy=multi-user.target
+                    SVCEOF
+
+                    systemctl daemon-reload
+                    systemctl enable lexdemo
+                    systemctl start lexdemo
+
+    # ---------------------------------------------------------------------
+    # Elastic IP so the public URL stays stable across reboots
+    # ---------------------------------------------------------------------
+    WebEip:
+        Type: AWS::EC2::EIP
+        Properties:
+            InstanceId: !Ref WebInstance
+
+Outputs:
+
+    WebsiteUrl:
+        Description: Open this in a browser (wait ~2-3 min after create for user data to finish).
+        Value: !Sub "http://${WebEip}"
+
+    PublicDnsUrl:
+        Description: Alternative URL via the instance public DNS name.
+        Value: !Sub "http://${WebInstance.PublicDnsName}"
+
+    InstanceId:
+        Description: EC2 instance ID (use EC2 Instance Connect from the console to log in).
+        Value: !Ref WebInstance
+
+    PublicIp:
+        Description: Elastic IP address.
+        Value: !Ref WebEip
