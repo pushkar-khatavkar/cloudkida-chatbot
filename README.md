@@ -1,5 +1,8 @@
 # Self-Service Digital Assistant — Amazon Lex + Bedrock Knowledge Base
 
+> **Lab sandbox (students):** launch your hands-on AWS environment here —
+> <https://prod.cloudkida.com/viewlab/CKLAWS-2d9857aaeb8546df838ac74cff264029>
+
 A hands-on project that builds a chatbot which answers questions from your own
 documents. It uses **Amazon Lex** (conversational interface) connected to an
 **Amazon Bedrock Knowledge Base** (RAG), and serves a custom chat UI from a
