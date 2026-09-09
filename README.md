@@ -472,7 +472,7 @@ in Part 4.
 1. Open the Bedrock **Knowledge Bases** console.
 2. Open **CloudkidaKB** → **Delete**.
 
-> Deleting the KB also removes its managed vector store.
+> Deleting the KB also removes its associated vector store.
 
 ## 5.4 Empty and delete the S3 bucket
 
@@ -498,5 +498,6 @@ completely clean account.
 | File | Purpose |
 |------|---------|
 | `master-minimal.yaml` | CloudFormation template for the EC2-hosted chat UI (Part 4) |
+| `CloudKida-Workshop.pdf` | Workshop slide deck |
 | `README.md` | This guide |
 | `images/` | Screenshots referenced throughout the guide |
